@@ -3,7 +3,8 @@ name: ci
 on:
   push:
     branches: [ main, master ]
-    tags: [ 'v*' ]
+    # The fork's v*-zontal.* tags are built and published by zontal-pack.yml.
+    tags: [ 'v*', '!v*-zontal.*' ]
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -176,7 +177,8 @@ jobs:
   publish-github:
     name: publish to GitHub Packages
     needs: [ build-test, aot-test, coverage, interop, benchmarks ]
-    if: startsWith(github.ref, 'refs/tags/v')
+    # Only the upstream repository publishes to the upstream author's feed.
+    if: startsWith(github.ref, 'refs/tags/v') && github.server_url == 'https://github.com'
     runs-on: ubuntu-latest
     permissions:
       contents: read

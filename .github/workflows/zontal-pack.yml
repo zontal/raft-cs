@@ -1,0 +1,211 @@
+name: ZONTAL pack
+
+# Tests the ZONTAL-patched RaftCs (see NOTICE.md), packs every RaftCs package at the
+# fork version, and pushes the packages to the NuGet feed of the studio organization.
+
+on:
+  push:
+    tags: [ 'v1.2.0-zontal.*' ]
+  workflow_dispatch:
+    inputs:
+      publish:
+        description: Push the packages to the studio feed
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: zontal-pack-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  DOTNET_NOLOGO: '1'
+  DOTNET_CLI_TELEMETRY_OPTOUT: '1'
+  PACKAGE_VERSION: 1.2.0-zontal.1
+  PACKAGE_IDS: RaftCs RaftCs.Storage.File RaftCs.Transport RaftCs.Transport.NanoMsg
+  NUGET_FEED: https://nuget.zontal.ghe.com/studio/index.json
+
+jobs:
+  test:
+    name: Build and test
+    runs-on: ubuntu-latest
+    steps:
+      # Nerdbank.GitVersioning computes the version from the history.
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore Raft.slnx
+
+      - name: Build
+        run: dotnet build Raft.slnx -c Release --no-restore
+
+      - name: Verify formatting
+        run: dotnet format Raft.slnx --verify-no-changes --no-restore
+
+      - name: Check line length
+        shell: pwsh
+        run: ./eng/check-line-length.ps1
+
+      - name: Test
+        run: dotnet test --solution Raft.slnx -c Release --no-build
+
+  pack:
+    name: Pack and push
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+            10.0.x
+
+      # version.json sets 1.2.0-zontal.1 for the zontal/1.2.0 branch and the v1.2.0-zontal.* tags.
+      # The repository URL links each package to this repository, which the feed requires
+      # for a push with the workflow token.
+      - name: Pack
+        shell: bash
+        run: |
+          set -euo pipefail
+          for project in src/Raft/Raft.csproj src/Raft.Storage.File/Raft.Storage.File.csproj \
+            src/Raft.Transport/Raft.Transport.csproj src/Raft.Transport.NanoMsg/Raft.Transport.NanoMsg.csproj; do
+            dotnet pack "$project" -c Release -o artifacts \
+              -p:IncludeSymbols=false \
+              -p:RepositoryUrl="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY"
+          done
+          ls -l artifacts
+
+      - name: Check package versions and assembly identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          count=0
+          for package in artifacts/*.nupkg; do
+            version=$(unzip -p "$package" '*.nuspec' | grep -oPm1 '(?<=<version>)[^<]+')
+            echo "$(basename "$package"): $version"
+            test "$version" = "$PACKAGE_VERSION"
+            count=$((count + 1))
+          done
+          test "$count" = "4"
+          # Outside the repository, so its build settings do not apply to the probe.
+          identity_dir="$RUNNER_TEMP/identity"
+          mkdir -p "$identity_dir"
+          unzip -o -q "artifacts/RaftCs.$PACKAGE_VERSION.nupkg" 'lib/net10.0/Raft.dll' -d "$identity_dir"
+          cat > "$identity_dir/Program.cs" <<'EOF'
+          System.Console.WriteLine(System.Reflection.AssemblyName.GetAssemblyName(args[0]).FullName);
+          EOF
+          cat > "$identity_dir/identity.csproj" <<'EOF'
+          <Project Sdk="Microsoft.NET.Sdk">
+            <PropertyGroup>
+              <OutputType>Exe</OutputType>
+              <TargetFramework>net10.0</TargetFramework>
+            </PropertyGroup>
+          </Project>
+          EOF
+          identity=$(dotnet run --project "$identity_dir/identity.csproj" -- "$identity_dir/lib/net10.0/Raft.dll" | tail -n 1)
+          echo "$identity"
+          test "$identity" = "Raft, Version=1.1.0.0, Culture=neutral, PublicKeyToken=dfdc46ace5e226f1"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: packages
+          path: artifacts/*.nupkg
+
+      - name: Push to the studio feed
+        if: github.event_name == 'push' || inputs.publish
+        shell: bash
+        env:
+          NUGET_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          dotnet nuget add source "$NUGET_FEED" --name studio \
+            --username "$GITHUB_ACTOR" --password "$NUGET_TOKEN" --store-password-in-clear-text
+          dotnet nuget push "artifacts/*.nupkg" --source studio --api-key "$NUGET_TOKEN" --skip-duplicate
+
+  verify:
+    name: Verify the feed
+    needs: pack
+    if: github.event_name == 'push' || inputs.publish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/setup-dotnet@v6.0.0
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: List the published versions
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          host="${GITHUB_SERVER_URL#https://}"
+          for id in $PACKAGE_IDS; do
+            versions=$(GH_HOST="$host" gh api "/orgs/studio/packages/nuget/$id/versions" --jq '.[].name')
+            echo "$id: $versions"
+            echo "$versions" | grep -qx "$PACKAGE_VERSION"
+          done
+
+      - name: Restore the packages through the feed
+        shell: bash
+        env:
+          NUGET_USER: ${{ github.actor }}
+          NUGET_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          mkdir restore-check && cd restore-check
+          cat > nuget.config <<EOF
+          <?xml version="1.0" encoding="utf-8"?>
+          <configuration>
+            <packageSources>
+              <clear />
+              <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
+              <add key="studio" value="$NUGET_FEED" />
+            </packageSources>
+            <packageSourceMapping>
+              <packageSource key="studio">
+                <package pattern="RaftCs" />
+                <package pattern="RaftCs.*" />
+              </packageSource>
+              <packageSource key="nuget.org">
+                <package pattern="*" />
+              </packageSource>
+            </packageSourceMapping>
+            <packageSourceCredentials>
+              <studio>
+                <add key="Username" value="%NUGET_USER%" />
+                <add key="ClearTextPassword" value="%NUGET_TOKEN%" />
+              </studio>
+            </packageSourceCredentials>
+          </configuration>
+          EOF
+          dotnet new console --framework net10.0 --name RestoreCheck --output . --no-restore
+          for id in $PACKAGE_IDS; do
+            dotnet add package "$id" --version "$PACKAGE_VERSION" --no-restore
+          done
+          dotnet restore
+          for id in $PACKAGE_IDS; do
+            lower=$(echo "$id" | tr '[:upper:]' '[:lower:]')
+            grep -q "$lower/$PACKAGE_VERSION" obj/project.assets.json
+          done
