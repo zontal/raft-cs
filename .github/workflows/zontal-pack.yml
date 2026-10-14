@@ -1,7 +1,8 @@
 name: ZONTAL pack
 
 # Tests the ZONTAL-patched RaftCs (see NOTICE.md), packs every RaftCs package at the
-# fork version, and pushes the packages to the NuGet feed of the studio organization.
+# fork version, and pushes the packages to the zontal GitHub Packages feed and to the static feed
+# https://zontal.github.io/nuget-feed/index.json, which restores without credentials.
 
 on:
   push:
@@ -9,7 +10,7 @@ on:
   workflow_dispatch:
     inputs:
       publish:
-        description: Push the packages to the studio feed
+        description: Push the packages to GitHub Packages and the static feed
         type: boolean
         default: false
 
@@ -25,7 +26,7 @@ env:
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
   PACKAGE_VERSION: 1.2.0-zontal.1
   PACKAGE_IDS: RaftCs RaftCs.Storage.File RaftCs.Transport RaftCs.Transport.NanoMsg
-  NUGET_FEED: https://nuget.zontal.ghe.com/studio/index.json
+  NUGET_FEED: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
 
 jobs:
   test:
@@ -130,19 +131,19 @@ jobs:
           name: packages
           path: artifacts/*.nupkg
 
-      - name: Push to the studio feed
+      - name: Push to GitHub Packages
         if: github.event_name == 'push' || inputs.publish
         shell: bash
         env:
           NUGET_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          dotnet nuget add source "$NUGET_FEED" --name studio \
+          dotnet nuget add source "$NUGET_FEED" --name zontal \
             --username "$GITHUB_ACTOR" --password "$NUGET_TOKEN" --store-password-in-clear-text
-          dotnet nuget push "artifacts/*.nupkg" --source studio --api-key "$NUGET_TOKEN" --skip-duplicate
+          dotnet nuget push "artifacts/*.nupkg" --source zontal --api-key "$NUGET_TOKEN" --skip-duplicate
 
   verify:
-    name: Verify the feed
+    name: Verify GitHub Packages
     needs: pack
     if: github.event_name == 'push' || inputs.publish
     runs-on: ubuntu-latest
@@ -160,9 +161,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          host="${GITHUB_SERVER_URL#https://}"
           for id in $PACKAGE_IDS; do
-            versions=$(GH_HOST="$host" gh api "/orgs/studio/packages/nuget/$id/versions" --jq '.[].name')
+            versions=$(gh api "/orgs/$GITHUB_REPOSITORY_OWNER/packages/nuget/$id/versions" --jq '.[].name')
             echo "$id: $versions"
             echo "$versions" | grep -qx "$PACKAGE_VERSION"
           done
@@ -181,10 +181,10 @@ jobs:
             <packageSources>
               <clear />
               <add key="nuget.org" value="https://api.nuget.org/v3/index.json" />
-              <add key="studio" value="$NUGET_FEED" />
+              <add key="zontal" value="$NUGET_FEED" />
             </packageSources>
             <packageSourceMapping>
-              <packageSource key="studio">
+              <packageSource key="zontal">
                 <package pattern="RaftCs" />
                 <package pattern="RaftCs.*" />
               </packageSource>
@@ -193,10 +193,10 @@ jobs:
               </packageSource>
             </packageSourceMapping>
             <packageSourceCredentials>
-              <studio>
+              <zontal>
                 <add key="Username" value="%NUGET_USER%" />
                 <add key="ClearTextPassword" value="%NUGET_TOKEN%" />
-              </studio>
+              </zontal>
             </packageSourceCredentials>
           </configuration>
           EOF
@@ -209,3 +209,13 @@ jobs:
             lower=$(echo "$id" | tr '[:upper:]' '[:lower:]')
             grep -q "$lower/$PACKAGE_VERSION" obj/project.assets.json
           done
+
+  static-feed:
+    name: Static feed
+    needs: verify
+    if: github.event_name == 'push' || inputs.publish
+    uses: zontal/nuget-feed/.github/workflows/publish.yml@main
+    with:
+      artifact: packages
+    secrets:
+      feed_deploy_key: ${{ secrets.NUGET_FEED_DEPLOY_KEY }}

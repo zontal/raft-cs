@@ -24,8 +24,9 @@ Every package keeps its upstream id and is versioned **`1.2.0-zontal.1`** by Ner
 | `RaftCs.Transport` | `Raft.Transport` |
 | `RaftCs.Transport.NanoMsg` | `Raft.Transport.NanoMsg` |
 
-The packages are published to the NuGet feed of the `studio` organization by
-[.github/workflows/zontal-pack.yml](.github/workflows/zontal-pack.yml) on a tag `v1.2.0-zontal.*`.
+The packages are published by [.github/workflows/zontal-pack.yml](.github/workflows/zontal-pack.yml) on a tag
+`v1.2.0-zontal.*` to the zontal GitHub Packages feed and to the static feed
+`https://zontal.github.io/nuget-feed/index.json`, which restores without credentials.
 
 ## Strong naming
 
