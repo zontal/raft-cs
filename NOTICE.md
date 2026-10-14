@@ -39,11 +39,16 @@ Assemblies compiled against upstream `RaftCs` 1.1.x bind to these without bindin
 
 Each patch is a branch from `v1.1.3` with failing-first tests, merged into `zontal/1.2.0`, and proposed upstream.
 
-| # | Branch | Change |
-| --- | --- | --- |
-| 1 | `fix/committed-entry-index` | `RaftNode.CommittedItems`: each committed command with its log index and term, so a state machine knows the log position of its state. `Committed` is a payload view of the same queue. |
-| 2 | `fix/file-storage-compaction` | `FileRaftStorage.Compact` rewrites the log file to the retained entries (written beside the log, then swapped in), so compaction bounds the file. |
-| 3 | `fix/snapshot-delivery` (on patch 1) | Application snapshots: `IRaftSnapshotStorage` (implemented by `MemoryStorage` and `FileRaftStorage`), `RaftNode.CreateSnapshotAsync`, a `CommittedItemKind.Snapshot` item when a follower installs the leader's snapshot and first after a restart, no compaction past the latest snapshot, and an atomically written, verified snapshot file. |
+| # | Branch | Change | Upstream |
+| --- | --- | --- | --- |
+| 1 | `fix/committed-entry-index` | `RaftNode.CommittedItems`: each committed command with its log index and term, so a state machine knows the log position of its state. `Committed` is a payload view of the same queue. | [marcschier/raft-cs#9](https://github.com/marcschier/raft-cs/pull/9) |
+| 2 | `fix/file-storage-compaction` | `FileRaftStorage.Compact` rewrites the log file to the retained entries (written beside the log, then swapped in), so compaction bounds the file. | [marcschier/raft-cs#10](https://github.com/marcschier/raft-cs/pull/10) |
+| 3 | `fix/snapshot-delivery` (on patch 1) | Application snapshots: `IRaftSnapshotStorage` (implemented by `MemoryStorage` and `FileRaftStorage`), `RaftNode.CreateSnapshotAsync`, a `CommittedItemKind.Snapshot` item when a follower installs the leader's snapshot and first after a restart, no compaction past the latest snapshot, and an atomically written, verified snapshot file. | [marcschier/raft-cs#11](https://github.com/marcschier/raft-cs/pull/11) |
+
+Not in `1.2.0-zontal.1`: commit `9ee9b3a` on `fix/committed-entry-index` (part of the upstream pull request)
+advances `RaftNode.AppliedIndex` before the commands of an applied batch are queued. In `1.2.0-zontal.1` a consumer can
+read a command whose index `AppliedIndex` does not cover yet, so a `CreateSnapshotAsync` or `CompactAsync` at that index is
+refused until the node publishes it. It ships with the next fork version, which needs a version decision.
 
 Other changes in this fork, not proposed upstream: this notice, the README section, version.json, the `zontal-pack`
 workflow, and a guard that keeps the upstream `ci` workflow from publishing to the upstream author's feed.
