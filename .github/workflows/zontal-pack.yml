@@ -24,7 +24,7 @@ concurrency:
 env:
   DOTNET_NOLOGO: '1'
   DOTNET_CLI_TELEMETRY_OPTOUT: '1'
-  PACKAGE_VERSION: 1.2.0-zontal.1
+  PACKAGE_VERSION: 1.2.0-zontal.2
   PACKAGE_IDS: RaftCs RaftCs.Storage.File RaftCs.Transport RaftCs.Transport.NanoMsg
   NUGET_FEED: https://nuget.pkg.github.com/${{ github.repository_owner }}/index.json
 
@@ -80,7 +80,7 @@ jobs:
             9.0.x
             10.0.x
 
-      # version.json sets 1.2.0-zontal.1 for the zontal/1.2.0 branch and the v1.2.0-zontal.* tags.
+      # version.json sets 1.2.0-zontal.2 for the zontal/1.2.0 branch and the v1.2.0-zontal.* tags.
       # The repository URL links each package to this repository, which the feed requires
       # for a push with the workflow token.
       - name: Pack
