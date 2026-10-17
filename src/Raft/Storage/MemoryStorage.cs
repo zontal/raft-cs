@@ -8,12 +8,15 @@ namespace Raft.Storage;
 /// A volatile, thread-safe <see cref="IRaftStorage"/> kept entirely in memory. It mirrors the raft-rs
 /// <c>MemStorage</c>: a sentinel entry at index 0 of the buffer represents the compacted snapshot boundary.
 /// </summary>
-public sealed class MemoryStorage : IRaftSnapshotStorage
+public sealed class MemoryStorage : IRaftSnapshotStorage, IRaftConfStateIndexStorage
 {
     private readonly object _gate = new();
     private readonly List<Entry> _entries = new() { default };
     private HardState _hardState;
     private SnapshotMetadata _snapshotMetadata;
+
+    // The constructor's membership is the bootstrap membership, so it is recorded at index zero.
+    private ulong? _confStateIndex = 0;
     private Snapshot? _snapshot;
 
     /// <summary>Initializes a new instance of the <see cref="MemoryStorage"/> class with no initial members.</summary>
@@ -48,16 +51,29 @@ public sealed class MemoryStorage : IRaftSnapshotStorage
         }
     }
 
-    /// <summary>Overwrites the persisted committed configuration.</summary>
+    /// <summary>
+    /// Overwrites the persisted committed configuration. The index it reflects becomes unknown:
+    /// <see cref="ConfStateIndex"/> returns <see langword="null"/> until the next
+    /// <see cref="SetConfState(ConfState, ulong)"/> or snapshot installation.
+    /// </summary>
     /// <param name="confState">The configuration to store.</param>
     public void SetConfState(ConfState confState)
     {
+        SetConfStateCore(confState, null);
+    }
+
+    /// <inheritdoc/>
+    public void SetConfState(ConfState confState, ulong index)
+    {
+        SetConfStateCore(confState, index);
+    }
+
+    /// <inheritdoc/>
+    public ulong? ConfStateIndex()
+    {
         lock (_gate)
         {
-            _snapshotMetadata = new SnapshotMetadata(
-                _snapshotMetadata.Index,
-                _snapshotMetadata.Term,
-                confState ?? new ConfState());
+            return _confStateIndex;
         }
     }
 
@@ -145,11 +161,18 @@ public sealed class MemoryStorage : IRaftSnapshotStorage
     {
         lock (_gate)
         {
-            if (_snapshot is not null && requestIndex <= _snapshot.Metadata.Index)
+            if (_snapshot is not null)
             {
-                return _snapshot;
+                if (requestIndex <= _snapshot.Metadata.Index)
+                {
+                    return _snapshot;
+                }
+
+                // A snapshot without the application state would skip the commands after this one.
+                throw new RaftStorageException(RaftStorageError.SnapshotTemporarilyUnavailable);
             }
 
+            // Without an application snapshot, the store has no application state to send: only the position.
             ulong appliedIndex = _hardState.Commit;
             if (requestIndex > appliedIndex)
             {
@@ -206,12 +229,14 @@ public sealed class MemoryStorage : IRaftSnapshotStorage
         lock (_gate)
         {
             ulong index = snapshot.Metadata.Index;
-            if (index <= _snapshotMetadata.Index)
+            ulong latestSnapshotIndex = _snapshot?.Metadata.Index ?? _snapshotMetadata.Index;
+            if (index <= latestSnapshotIndex)
             {
                 throw new RaftStorageException(RaftStorageError.SnapshotOutOfDate);
             }
 
             _snapshotMetadata = snapshot.Metadata;
+            _confStateIndex = index;
             _snapshot = snapshot;
             _entries.Clear();
             _entries.Add(new Entry(EntryType.Normal, snapshot.Metadata.Term, snapshot.Metadata.Index, default));
@@ -310,4 +335,16 @@ public sealed class MemoryStorage : IRaftSnapshotStorage
     }
 
     private ulong LastIndexLocked() => _entries[0].Index + (ulong)_entries.Count - 1;
+
+    private void SetConfStateCore(ConfState confState, ulong? index)
+    {
+        lock (_gate)
+        {
+            _snapshotMetadata = new SnapshotMetadata(
+                _snapshotMetadata.Index,
+                _snapshotMetadata.Term,
+                confState ?? new ConfState());
+            _confStateIndex = index;
+        }
+    }
 }
