@@ -1974,21 +1974,6 @@ public sealed class FileRaftStorageTests
         return fences;
     }
 
-    /// <summary>Returns the indexes of the entry records in the log file, in file order.</summary>
-    private static List<ulong> LoggedEntryIndexes(string logPath)
-    {
-        var indexes = new List<ulong>();
-        foreach (byte[] payload in ReadLogRecords(logPath))
-        {
-            if (payload[0] == 0)
-            {
-                indexes.Add(BinaryPrimitives.ReadUInt64BigEndian(payload.AsSpan(1 + 1 + 8)));
-            }
-        }
-
-        return indexes;
-    }
-
     private static List<byte[]> ReadLogRecords(string logPath)
     {
         byte[] log;
@@ -2429,6 +2414,32 @@ public sealed class FileRaftStorageTests
     private static FileStream OpenShared(string path)
     {
         return new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+    }
+
+    /// <summary>Returns the indexes of the entry records in the log file, in file order.</summary>
+    private static List<ulong> LoggedEntryIndexes(string logPath)
+    {
+        byte[] log;
+        using (FileStream stream = OpenShared(logPath))
+        {
+            log = new byte[stream.Length];
+            stream.ReadExactly(log);
+        }
+
+        var indexes = new List<ulong>();
+        int offset = 0;
+        while (offset + 4 <= log.Length)
+        {
+            int length = BinaryPrimitives.ReadInt32BigEndian(log.AsSpan(offset));
+            if (log[offset + 4] == 0)
+            {
+                indexes.Add(BinaryPrimitives.ReadUInt64BigEndian(log.AsSpan(offset + 4 + 1 + 1 + 8)));
+            }
+
+            offset += 4 + length;
+        }
+
+        return indexes;
     }
 
     [SupportedOSPlatform("linux")]

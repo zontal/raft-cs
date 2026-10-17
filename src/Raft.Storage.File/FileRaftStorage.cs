@@ -1198,7 +1198,8 @@ public sealed class FileRaftStorage : IRaftSnapshotStorage, IRaftConfStateIndexS
 
     /// <summary>
     /// Replaces the log file with one that holds only the retained log: its generation, the compaction boundary, the
-    /// membership, the entries after the boundary, and the hard state.
+    /// membership, the entries after the boundary, and the hard state. The guard record for older readers directly
+    /// follows the compaction boundary.
     /// </summary>
     /// <returns>Whether the log file was replaced; not when its access cannot be reproduced on a new file.</returns>
     private bool TryRewriteLog(List<Entry> compactedEntries)
