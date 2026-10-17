@@ -2216,6 +2216,117 @@ public sealed class FileRaftStorageTests
         }
     }
 
+    [Test]
+    public async Task ConfigurationRecords_FollowOneRollbackFence_AcrossReopenAndSnapshotInstallation()
+    {
+        string directory = CreateDirectory();
+        string logPath = Path.Combine(directory, "log");
+        try
+        {
+            using (var storage = new FileRaftStorage(new FileRaftStorageOptions(directory) { Fsync = false }))
+            {
+                storage.Append(CreateEntries(1, 3));
+                await Assert.That(string.Join(",", LogRecordKinds(logPath))).IsEqualTo("1,0,0,0");
+                storage.SetConfState(new Configuration.ConfState(TwoVoters), 3);
+            }
+
+            using (var reopened = new FileRaftStorage(new FileRaftStorageOptions(directory) { Fsync = false }))
+            {
+                reopened.SetConfState(new Configuration.ConfState(OneVoter));
+            }
+
+            // Earlier readers skip the configuration records but fail on the fence before them: a compaction past the
+            // end of every log.
+            await Assert.That(string.Join(",", LogRecordKinds(logPath))).IsEqualTo("1,0,0,0,fence,5,7,7");
+
+            using (var reopened = new FileRaftStorage(new FileRaftStorageOptions(directory) { Fsync = false }))
+            {
+                await Assert.That(reopened.InitialState().ConfState.Equals(new Configuration.ConfState(OneVoter)))
+                    .IsTrue();
+                await Assert.That(reopened.ConfStateIndex()).IsNull();
+                await AssertEntriesEqual(reopened.Entries(1, 4, ulong.MaxValue), CreateEntries(1, 3));
+                reopened.ApplySnapshot(
+                    new Snapshot(new SnapshotMetadata(5, 5, new Configuration.ConfState(TwoVoters)), new byte[] { 5 }));
+                reopened.SetConfState(new Configuration.ConfState(OneVoter), 6);
+            }
+
+            // The installed log starts with its generation, then the fence and the membership at the snapshot.
+            await Assert.That(string.Join(",", LogRecordKinds(logPath))).IsEqualTo("6,fence,5,7,3,5,7");
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    [Test]
+    public async Task ApplySnapshot_OverALegacyLog_FencesItBeforePublishingTheSnapshot()
+    {
+        string directory = CreateDirectory();
+        string logPath = Path.Combine(directory, "log");
+        string newLogPath = Path.Combine(directory, "log.new");
+        try
+        {
+            new LegacyStoreFormat.Log()
+                .Append(CreateEntries(1, 5))
+                .HardState(new HardState(5, 1, 5))
+                .WriteTo(directory);
+            using (var storage = new FileRaftStorage(new FileRaftStorageOptions(directory) { Fsync = false }))
+            {
+                // The process stops after the snapshot is published, before the log that replaces the superseded one
+                // is written: here the replacement cannot be created.
+                Directory.CreateDirectory(newLogPath);
+                var installed = new Snapshot(
+                    new SnapshotMetadata(8, 8, new Configuration.ConfState(TwoVoters)), new byte[] { 8 });
+                await Assert.That(Capture(() => storage.ApplySnapshot(installed))).IsNotNull();
+            }
+
+            Directory.Delete(newLogPath);
+
+            // An earlier reader, which ignores the generation the published snapshot names, fails on the fence instead
+            // of replaying the superseded entries after the snapshot.
+            await Assert.That(string.Join(",", LogRecordKinds(logPath))).IsEqualTo("1,0,0,0,0,0,3,fence");
+
+            using var reopened = new FileRaftStorage(new FileRaftStorageOptions(directory) { Fsync = false });
+            await Assert.That(reopened.LatestSnapshot()!.Metadata.Index).IsEqualTo(8UL);
+            await Assert.That(reopened.FirstIndex()).IsEqualTo(9UL);
+            await Assert.That(reopened.InitialState().HardState).IsEqualTo(new HardState(8, 1, 8));
+            await Assert.That(string.Join(",", LogRecordKinds(logPath))).IsEqualTo("6,fence,5,7,3");
+        }
+        finally
+        {
+            DeleteDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// Returns the kind of each record in the log file, in file order; a compaction record at the index no log reaches
+    /// is "fence".
+    /// </summary>
+    private static List<string> LogRecordKinds(string logPath)
+    {
+        byte[] log;
+        using (var stream = new FileStream(logPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite))
+        {
+            log = new byte[stream.Length];
+            stream.ReadExactly(log);
+        }
+
+        var kinds = new List<string>();
+        int offset = 0;
+        while (offset + 4 <= log.Length)
+        {
+            int length = BinaryPrimitives.ReadInt32BigEndian(log.AsSpan(offset));
+            ReadOnlySpan<byte> payload = log.AsSpan(offset + 4, length);
+            bool fence = payload.Length == 1 + 8 && payload[0] == 2
+                && BinaryPrimitives.ReadUInt64BigEndian(payload.Slice(1)) == ulong.MaxValue;
+            kinds.Add(fence ? "fence" : payload[0].ToString(System.Globalization.CultureInfo.InvariantCulture));
+            offset += 4 + length;
+        }
+
+        return kinds;
+    }
+
     /// <summary>
     /// Returns the end of the last complete record of <paramref name="log"/> within its first <paramref name="cut"/>
     /// bytes, from <paramref name="start"/> on; an index record counts only with the configuration record after it.

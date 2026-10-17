@@ -412,6 +412,15 @@ public sealed class FileRaftStorage : IRaftSnapshotStorage, IRaftConfStateIndexS
             throw new RaftStorageException(RaftStorageError.SnapshotOutOfDate);
         }
 
+        // Earlier readers ignore the generation the snapshot names, so until the log is replaced they would replay
+        // the superseded log after the new snapshot: the log is fenced before the snapshot is published.
+        if (!_logHasRollbackFence)
+        {
+            WriteRollbackFence(_logStream);
+            FlushLog();
+            _logHasRollbackFence = true;
+        }
+
         // The snapshot names the next log generation and is published first: a reopen after a crash before the log
         // it supersedes is replaced completes the installation.
         ulong generation = _logGeneration + 1;
@@ -438,7 +447,8 @@ public sealed class FileRaftStorage : IRaftSnapshotStorage, IRaftConfStateIndexS
 
     /// <summary>
     /// Writes a log of <paramref name="generation"/> beside the current one and swaps it in, so after a crash either
-    /// the former or the new log is in place.
+    /// the former or the new log is in place. A log written whole starts with its generation record, which is read
+    /// before the log is replayed, and holds the membership after a rollback fence; any rewrite of the log keeps both.
     /// </summary>
     private void ReplaceLog(ulong generation, ulong confStateIndex)
     {
