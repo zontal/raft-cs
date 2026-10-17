@@ -4,7 +4,7 @@
 
 A pure-managed, **NativeAOT-ready** implementation of the **[Raft consensus algorithm](https://raft.github.io/)** for modern .NET. No native dependency.
 
-> **ZONTAL fork.** This is ZONTAL's fork of `marcschier/raft-cs` at `v1.1.3`, packaged as `1.2.0-zontal.2` with three patches: committed commands carry their log index (`RaftNode.CommittedItems`), `FileRaftStorage` compaction shrinks the log file where it can keep the file's access exactly, and application snapshots are created, sent to lagging followers, and handed back to the application on restart (`RaftNode.CreateSnapshotAsync`, `IRaftSnapshotStorage`), with the membership recorded at its log index (`IRaftConfStateIndexStorage`). See [NOTICE.md](NOTICE.md).
+> **ZONTAL fork.** This is ZONTAL's fork of `marcschier/raft-cs` at `v1.1.3`, packaged as `1.2.0-zontal.3` with three patches: committed commands carry their log index (`RaftNode.CommittedItems`), `FileRaftStorage` compaction shrinks the log file where it can keep the file's access exactly, and application snapshots are created, sent to lagging followers, and handed back to the application on restart (`RaftNode.CreateSnapshotAsync`, `IRaftSnapshotStorage`), with the membership recorded at its log index (`IRaftConfStateIndexStorage`). See [NOTICE.md](NOTICE.md).
 
 `Raft` is a customizable **core consensus module** — modeled on [tikv/raft-rs](https://github.com/tikv/raft-rs) — with **bring-your-own log, state machine, and transport**. The deterministic state machine (`RaftCore`) is wrapped by an asynchronous `RaftNode` that owns timers, transport, and storage, so you get a working replica out of the box and can swap any piece.
 

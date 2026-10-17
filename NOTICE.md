@@ -14,7 +14,7 @@ licence.
 
 ## Packages and version
 
-Every package keeps its upstream id and is versioned **`1.2.0-zontal.2`** by Nerdbank.GitVersioning
+Every package keeps its upstream id and is versioned **`1.2.0-zontal.3`** by Nerdbank.GitVersioning
 ([version.json](version.json)):
 
 | Package | Assembly |
@@ -41,24 +41,35 @@ Assemblies compiled against upstream `RaftCs` 1.1.x bind to these without bindin
 ## Patches
 
 Each patch is a branch from `v1.1.3` with failing-first tests, merged into `zontal/1.2.0`, and proposed upstream.
-`1.2.0-zontal.2` contains each branch up to the head below.
+`1.2.0-zontal.3` contains each branch up to the head below.
 
 | # | Branch | Head | Change | Upstream |
 | --- | --- | --- | --- | --- |
 | 1 | `fix/committed-entry-index` | `9ee9b3a` | `RaftNode.CommittedItems`: each committed command with its log index and term, so a state machine knows the log position of its state. `Committed` is a payload view of the same queue. `RaftNode.AppliedIndex` advances before the commands of an applied batch are queued. | [marcschier/raft-cs#9](https://github.com/marcschier/raft-cs/pull/9) |
-| 2 | `fix/file-storage-compaction` | `fa9690b` | `FileRaftStorage.Compact` stages the retained log beside the log file and swaps it in, durably and retryably, so compaction bounds the file. The file is rewritten only when its owner, group, and access control can be preserved exactly; otherwise the compaction is logical (recorded in the log, which keeps its access and does not shrink). | [marcschier/raft-cs#10](https://github.com/marcschier/raft-cs/pull/10) |
-| 3 | `fix/snapshot-delivery` (on patch 1) | `d1c6aff` | Application snapshots: `IRaftSnapshotStorage` (implemented by `MemoryStorage` and `FileRaftStorage`), `RaftNode.CreateSnapshotAsync`, a `CommittedItemKind.Snapshot` item when a follower installs the leader's snapshot and first after a restart, and no compaction past the latest snapshot. The committed membership is stored with the index it reflects (`IRaftConfStateIndexStorage`), so a restart replays exactly the configuration changes after it. `FileRaftStorage` writes point-in-time snapshot files and installs snapshots crash-atomically. | [marcschier/raft-cs#11](https://github.com/marcschier/raft-cs/pull/11) |
+| 2 | `fix/file-storage-compaction` | `153c629` | `FileRaftStorage.Compact` stages the retained log beside the log file and swaps it in, durably and retryably, so compaction bounds the file. The file is rewritten only when its owner, group, and access control can be preserved exactly; otherwise the compaction is logical (recorded in the log, which keeps its access and does not shrink). | [marcschier/raft-cs#10](https://github.com/marcschier/raft-cs/pull/10) |
+| 3 | `fix/snapshot-delivery` (on patch 1) | `fa6e6a1` | Application snapshots: `IRaftSnapshotStorage` (implemented by `MemoryStorage` and `FileRaftStorage`), `RaftNode.CreateSnapshotAsync`, a `CommittedItemKind.Snapshot` item when a follower installs the leader's snapshot and first after a restart, and no compaction past the latest snapshot. The committed membership is stored with the index it reflects (`IRaftConfStateIndexStorage`), so a restart replays exactly the configuration changes after it. `FileRaftStorage` writes point-in-time snapshot files and installs snapshots crash-atomically. Membership records are record kind 7 (kind 4 is patch 2's compaction-base record) and follow a compaction record at index 2^64−1 (a rollback fence) that earlier releases, which ignore membership records, fail on. | [marcschier/raft-cs#11](https://github.com/marcschier/raft-cs/pull/11) |
 
-Patches 2 and 3 both change `FileRaftStorage`; the fork's merge of the two keeps the behaviour of both and adds:
+Patches 2 and 3 both change `FileRaftStorage`; the fork's merge of the two keeps the behaviour of both and adds what
+neither branch can carry alone: a rewritten compacted log starts with the log generation and keeps the rollback fence
+and the membership records, so the snapshot still names the log that continues it and the membership stored in the log
+survives the rewrite. The record numbering and the rollback fence, first added by this merge in `1.2.0-zontal.2`, are
+part of patch 3 since `fa6e6a1`.
 
-- A rewritten compacted log starts with the log generation and keeps the membership records, so the snapshot still
-  names the log that continues it and the membership stored in the log survives the rewrite.
-- The configuration record is record kind 7: kind 4 is the compaction-base record, which `1.2.0-zontal.1` already
-  wrote.
-- A compaction record at index 2^64−1 (a rollback fence) precedes the first membership record of a log. Releases that
-  ignore membership records fail on it instead of opening the store with an earlier membership; this release skips it.
+## Changes since 1.2.0-zontal.2
 
-## Changes since 1.2.0-zontal.1
+The on-disk format is unchanged: stores written by `1.2.0-zontal.2` and `1.2.0-zontal.3` open with either version.
+
+- **Snapshot installation crash window:** installing a snapshot writes the snapshot file before it replaces the log.
+  When the log holds no rollback fence yet, it now gets one, flushed to disk, before the snapshot file is written. If
+  the process stops between the two, an earlier release refuses the store instead of replaying the superseded log after
+  the new snapshot.
+- **Tests and CI gates:** the upstream branches now carry the test fixes that `1.2.0-zontal.2` applied in its merge
+  (wrapped long lines, camel-cased local functions,
+  `CreateSnapshotAsync_AfterAStorageWriteFailure_FailsInsteadOfWaiting` waiting for the first applied entry, and the
+  compaction rewrite checked by its retained entries), and new tests cover the fence before the first membership
+  record and the installation crash window over a log of an earlier release.
+
+## Changes in 1.2.0-zontal.2 (since 1.2.0-zontal.1)
 
 `1.2.0-zontal.1` contained the first revisions of patches 2 and 3 (`7bd15e4`, and `03e5334`, the change that `410d7db`
 carries on top of patch 1); `1.2.0-zontal.2` contains the revisions after upstream review.
@@ -76,7 +87,7 @@ carries on top of patch 1); `1.2.0-zontal.2` contains the revisions after upstre
   continues it; a log written whole starts with a log generation record; the membership is kept in the log as
   configuration records with the index they reflect, after a rollback fence; a rewritten compacted log holds a
   compaction-base record and a guard record that older readers refuse.
-- **Rollback:** stores written by `1.2.0-zontal.1` open with `1.2.0-zontal.2`. After `1.2.0-zontal.2` rewrites a
+- **Rollback:** stores written by `1.2.0-zontal.1` open with `1.2.0-zontal.2` and later. After one of them rewrites a
   compacted log, installs or creates a snapshot, or records a membership in the log, `1.2.0-zontal.1` cannot open the
   store: it fails closed rather than misread it.
 
@@ -86,7 +97,7 @@ carries on top of patch 1); `1.2.0-zontal.2` contains the revisions after upstre
 before the commands of an applied batch are queued. The packages first published as `1.2.0-zontal.1` on 2026-10-14
 lacked that commit; they were replaced on the same day by a build that includes it, under the same version. A restore
 that still holds the first build in its NuGet global packages folder keeps it until that folder entry is removed
-(`dotnet nuget locals global-packages --clear`). `1.2.0-zontal.2` is a new version and is not affected.
+(`dotnet nuget locals global-packages --clear`). Later versions are not affected.
 
 Other changes in this fork, not proposed upstream: this notice, the README section, version.json, the `zontal-pack`
 workflow, and a guard that keeps the upstream `ci` workflow from publishing to the upstream author's feed.
